@@ -1113,6 +1113,16 @@ func (p *portworx) StartVolumeSnapshotRestore(snapRestore *storkapi.VolumeSnapsh
 
 			return err
 		}
+
+		var poolID string
+		isRes := true
+		labels := make(map[string]string)
+		locator := &api.VolumeLocator{VolumeLabels: labels}
+		ok, msg, err = p.ensureNodesHaveMinVersion("2.6.0")
+		if err != nil || !ok {
+			logrus.Infof("Fast restore is supported onword PX version 2.6.0: " + msg)
+			isRes = false
+		}
 		// Get volume client from user context
 		volDriver, err := p.getUserVolDriver(snapRestore.Annotations)
 		if err != nil {
@@ -1139,16 +1149,24 @@ func (p *portworx) StartVolumeSnapshotRestore(snapRestore *storkapi.VolumeSnapsh
 					Cause: fmt.Sprintf("Volume not found err: %v", err),
 				}
 			}
-			replNodes := vols[0].GetReplicaSets()[0]
+			if isRes {
+				locator.VolumeLabels[api.SpecMatchSrcVolProvision] = "true"
+			} else {
+				replNodes := vols[0].GetReplicaSets()[0]
+				poolID = replNodes.GetPoolUuids()[0]
+				locator = nil
+			}
+
 			taskID := restoreTaskPrefix + uid
 			restoreName := restoreNamePrefix + uid
-			log.VolumeSnapshotRestoreLog(snapRestore).Infof("Restoring cloudsnapshot to volume %v on pool %v", restoreName, replNodes.GetPoolUuids()[0])
+			log.VolumeSnapshotRestoreLog(snapRestore).Infof("Restoring cloudsnapshot to volume %v on pool %v", restoreName, poolID)
 			_, err = volDriver.CloudBackupRestore(&api.CloudBackupRestoreRequest{
 				Name:              taskID,
 				ID:                snapID,
 				RestoreVolumeName: restoreName,
 				CredentialUUID:    credID,
-				NodeID:            replNodes.GetPoolUuids()[0],
+				NodeID:            poolID,
+				Locator:           locator,
 			})
 			if err != nil {
 				if _, ok := err.(*ost_errors.ErrExists); !ok {
